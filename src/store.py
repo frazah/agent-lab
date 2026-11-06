@@ -1,8 +1,18 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-class NoteNotFoundError(Exception):
+class NoteStoreError(Exception):
     pass
+
+class NoteNotFoundError(NoteStoreError):
+    def __init__(self, note_id: str):
+        self.note_id = note_id
+        super().__init__(f"Note not found: {note_id}")
+
+class InvalidNoteIdError(NoteStoreError):
+    def __init__(self, note_id: str):
+        self.note_id = note_id
+        super().__init__(f"Invalid note ID: {note_id}")
 
 @dataclass
 class Note:
@@ -23,9 +33,15 @@ class NoteStore:
     path: Path
 
     def _note_path(self, note_id: str) -> Path:
-        file = self.path / f"{note_id}.md"
-        if not file.exists(): 
+        folder = self.path.resolve()
+        file = (self.path / f"{note_id}.md").resolve()
+
+        if not file.is_relative_to(folder):
+            raise InvalidNoteIdError(note_id)
+
+        if not file.exists():
             raise NoteNotFoundError(note_id)
+
         return file
 
     def delete_note(self, note_id:str)-> None:
@@ -61,11 +77,7 @@ class NoteStore:
 
 if __name__ == "__main__":
     store = NoteStore(Path("fixtures/base_notes"))
-    #note = store.get_note("spesa-settimana-1")
-    #print(note.title, note.tags, note.content)
-
-    #store.delete_note("spesa-settimana-1")
-
+   
     search_res = store.search_notes("allenamento")
     print(f"Found {len(search_res)} results for 'allenamento':")
     for result in search_res:
