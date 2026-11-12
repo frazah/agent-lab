@@ -7,7 +7,7 @@ FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "base_notes"
 
 @pytest.fixture
 def get_temp_store(tmp_path):
-    # Copy the contents of the fixtures directory to the temporary path
+    # Each test gets its own copy of the notes, so deletes never touch fixtures/.
     shutil.copytree(FIXTURE_PATH, tmp_path / "notes")
     store = NoteStore(path=tmp_path / "notes")
     return store
@@ -15,6 +15,7 @@ def get_temp_store(tmp_path):
 
 @pytest.fixture
 def secret_file(tmp_path):
+    # A note that sits next to the notes folder, not inside it.
     path = tmp_path / "secret.md"
     path.write_text(
         "---\n"
@@ -67,6 +68,14 @@ def test_search_is_case_insensitive(get_temp_store):
 def test_search_no_results(get_temp_store):
     results = get_temp_store.search_notes("non-existent-query")
     assert len(results) == 0 
+
+
+def test_search_includes_tags(get_temp_store):
+    # The pancake note has "palestra" only as a tag, not in its title or body.
+    results = get_temp_store.search_notes("palestra")
+    ids = {r.note_id for r in results}
+    assert len(results) == 3
+    assert "ricetta-pancake-proteici" in ids
 
 
 def test_search_only_content(get_temp_store):
