@@ -111,11 +111,13 @@ def dispatch(store: NoteStore, name: str, args: dict) -> str:
     required = {"search_notes": "query", "get_note": "note_id", "delete_note": "note_id"}
     if name not in required:
         return f"Error: unknown tool '{name}'. Available tools: {', '.join(required)}"
+    
     # Check the argument here rather than catching KeyError below: the store can
     # raise KeyError on its own, and we'd report it as a missing argument.
     arg = required[name]
     if arg not in args:
         return f"Error: missing required argument '{arg}' for tool '{name}'"
+    
     value = args[arg]
 
     try:

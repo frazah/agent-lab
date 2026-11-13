@@ -1,5 +1,4 @@
 """A minimal agent loop: Claude manages the user's notes through three tools.
-
 Usage: python src/agent.py "your request"
 """
 
@@ -30,8 +29,8 @@ SYSTEM = "Sei un assistente che gestisce le note personali dell'utente."
 client = anthropic.Anthropic()
 
 
+"""Let the model call tools until it gives a final answer, and return that answer."""
 def run_agent(store: NoteStore, user_message: str) -> str:
-    """Let the model call tools until it gives a final answer, and return that answer."""
     messages: list[MessageParam] = [{"role": "user", "content": user_message}]
 
     for iteration in range(1, MAX_ITERATIONS + 1):
@@ -82,16 +81,21 @@ if __name__ == "__main__":
 
     # delete_note has no safeguards, so the agent only ever works on a copy.
     notes_path = os.getenv("NOTES_PATH")
+
     if not notes_path:
         sys.exit("Set NOTES_PATH in .env, e.g. NOTES_PATH=tmp/sample_notes")
+
     workdir = Path(notes_path)
     if not workdir.is_absolute():
         workdir = PROJECT_ROOT / workdir  # relative paths start from the project root
+
     workdir = workdir.resolve()
     if workdir == FIXTURES or workdir.is_relative_to(FIXTURES):
         sys.exit(f"NOTES_PATH is inside fixtures/ ({workdir}). Point it to a copy.")
+
     if not workdir.is_dir():
         sys.exit(f"NOTES_PATH not found: {workdir}. Run ./reset.sh to create it.")
+        
     print(f"notes: {workdir}\n")
 
     answer = run_agent(NoteStore(workdir), question)

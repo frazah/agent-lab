@@ -1,7 +1,5 @@
 """Read, search and delete Markdown notes stored in a folder.
-
 Each note is a file named <note_id>.md, with a small header on top:
-
     ---
     title: Spesa settimana 1
     tags: spesa, casa
