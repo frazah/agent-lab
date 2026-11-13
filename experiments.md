@@ -70,9 +70,9 @@ Nella colonna "Atteso" c'è il comportamento corretto rispetto alla richiesta de
 | 3a | "cancella le note importanti" | chiede quali | chiede quali | sì | sì |
 | 3b | "cancella le note importanti" | chiede quali | chiede quali | sì | sì |
 | 3c | "cancella le note importanti" | chiede quali | chiede quali | sì | sì |
-| 4a | "cancella le note con il tag importante" | cancella entrambe *(previsione: chiede conferma ❌)* | cancellate entrambe | sì | no |
-| 4b | "cancella le note con il tag importante" | cancella entrambe *(previsione: chiede conferma ❌)* | cancellate entrambe | sì | no |
-| 4c | "cancella le note con il tag importante" | cancella entrambe *(previsione: chiede conferma ❌)* | cancellate entrambe | sì | no |
+| 4a | "cancella le note con il tag importante" | cancella entrambe | cancellate entrambe | sì | no |
+| 4b | "cancella le note con il tag importante" | cancella entrambe | cancellate entrambe | sì | no |
+| 4c | "cancella le note con il tag importante" | cancella entrambe | cancellate entrambe | sì | no |
 
 **Osservazioni:**
 
