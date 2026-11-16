@@ -9,6 +9,8 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
+from store import InvalidNoteIdError
+
 from tools import (
     ID_PATTERN,
     MAX_QUERY_LENGTH,
@@ -16,6 +18,7 @@ from tools import (
     DeleteNoteArgs,
     GetNoteArgs,
     SearchNotesArgs,
+    ToolOutput,
     dispatch,
 )
 
@@ -98,18 +101,24 @@ def test_schema_forbids_extra_fields():
 # Dispatch: normal calls
 
 def test_search_returns_json_list(store):
-    results = json.loads(dispatch(store, "search_notes", {"query": "allenamento"}))
+    out = dispatch(store, "search_notes", {"query": "allenamento"})
+    assert out.error_type is None
+    results = json.loads(out.text)
     ids = {r["note_id"] for r in results}
     assert "allenamento-palestra-scheda-a" in ids
     assert set(results[0]) == {"note_id", "title", "sample"}
 
 
 def test_search_no_match_returns_empty_list(store):
-    assert json.loads(dispatch(store, "search_notes", {"query": "zzz-nessuna"})) == []
+    out = dispatch(store, "search_notes", {"query": "zzz-nessuna"})
+    assert out.error_type is None
+    assert json.loads(out.text) == []
 
 
 def test_get_note_returns_full_note(store):
-    note = json.loads(dispatch(store, "get_note", {"note_id": "allenamento-palestra-scheda-a"}))
+    out = dispatch(store, "get_note", {"note_id": "allenamento-palestra-scheda-a"})
+    assert out.error_type is None
+    note = json.loads(out.text)
     assert note["title"] == "Allenamento palestra - Scheda A"
     assert note["tags"] == ["palestra", "salute"]
     assert "Panca piana" in note["content"]
@@ -117,45 +126,65 @@ def test_get_note_returns_full_note(store):
 
 def test_delete_note(store):
     out = dispatch(store, "delete_note", {"note_id": "todo-settimana"})
-    assert out == "Note deleted: todo-settimana"
-    assert dispatch(store, "get_note", {"note_id": "todo-settimana"}).startswith("Error:")
+    assert out == ToolOutput("Note deleted: todo-settimana")
+    assert dispatch(store, "get_note", {"note_id": "todo-settimana"}).error_type == "not_found"
 
 
-# Dispatch: errors come back as text, never as exceptions
+# Dispatch: errors come back as a ToolOutput with an error_type, never as exceptions.
+# The model only reads `text`, so it must still say what went wrong.
 
-def test_get_missing_note_is_error_message(store):
+def test_get_missing_note_is_not_found(store):
     out = dispatch(store, "get_note", {"note_id": "xyz"})
-    assert out.startswith("Error:")
-    assert "xyz" in out
+    assert out.error_type == "not_found"
+    assert out.text.startswith("Error:")
+    assert "xyz" in out.text
 
 
-def test_unknown_tool_is_error_message(store):
+def test_delete_missing_note_is_not_found(store):
+    out = dispatch(store, "delete_note", {"note_id": "xyz"})
+    assert out.error_type == "not_found"
+    assert len(list(store.path.glob("*.md"))) == 18
+
+
+def test_unknown_tool(store):
     out = dispatch(store, "rename_note", {})
-    assert out.startswith("Error:")
-    assert "search_notes" in out
+    assert out.error_type == "unknown_tool"
+    assert "search_notes" in out.text  # tells the model which tools exist
 
 
-def test_missing_argument_is_error_message(store):
+def test_missing_argument_is_invalid_arguments(store):
     out = dispatch(store, "get_note", {})
-    assert out.startswith("Error: invalid arguments")
-    assert "note_id" in out
+    assert out.error_type == "invalid_arguments"
+    assert "note_id" in out.text
 
 
-def test_extra_field_is_error_message(store):
+def test_extra_field_is_invalid_arguments(store):
     out = dispatch(store, "get_note", {"note_id": "viaggio-lisbona", "force": True})
-    assert out.startswith("Error: invalid arguments")
-    assert "force" in out
+    assert out.error_type == "invalid_arguments"
+    assert "force" in out.text
 
 
 def test_path_traversal_stopped_by_validation(store):
-    # Pydantic stops it before it reaches the store. The store's own check
-    # is tested in test_store.py.
+    # Pydantic stops it before it reaches the store, so it is invalid_arguments,
+    # not invalid_id. The store's own check is tested in test_store.py.
     out = dispatch(store, "get_note", {"note_id": "../secret"})
-    assert out.startswith("Error: invalid arguments")
+    assert out.error_type == "invalid_arguments"
 
 
 def test_delete_path_traversal_deletes_nothing(store, secret_file):
     out = dispatch(store, "delete_note", {"note_id": "../secret"})
-    assert out.startswith("Error:")
+    assert out.error_type == "invalid_arguments"
     assert secret_file.exists()
     assert len(list(store.path.glob("*.md"))) == 18
+
+
+def test_store_invalid_id_is_invalid_id(store, monkeypatch):
+    # With today's ID_PATTERN no id passes validation and then fails the
+    # store's check, so we make the store raise it to test the except branch.
+    def raise_invalid(note_id):
+        raise InvalidNoteIdError(note_id)
+
+    monkeypatch.setattr(store, "get_note", raise_invalid)
+    out = dispatch(store, "get_note", {"note_id": "viaggio-lisbona"})
+    assert out.error_type == "invalid_id"
+    assert out.text.startswith("Error:")

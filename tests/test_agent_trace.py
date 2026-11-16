@@ -65,6 +65,7 @@ def test_end_turn_writes_start_and_end(store, tmp_path, monkeypatch):
     assert call["name"] == result["name"] == "delete_note"
     assert call["args"] == {"note_id": deleted}
     assert result["is_error"] is False
+    assert result["error_type"] is None
 
     assert start["type"] == "run_start"
     assert start["request"] == "cancella una nota"

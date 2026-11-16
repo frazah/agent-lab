@@ -100,16 +100,17 @@ def run_agent(store: NoteStore, user_message: str, tracer: Tracer) -> str:
             tracer.log("tool_call", step=iteration, tool_use_id=block.id,
                        name=block.name, args=block.input)
 
-            output = dispatch(store, block.name, block.input)
-            is_error = output.startswith("Error:")
-            print(f"    RESULT {output}")
+            out = dispatch(store, block.name, block.input)
+            is_error = out.error_type is not None
+            print(f"    RESULT {out.text}")
             tracer.log("tool_result", step=iteration, tool_use_id=block.id,
-                       name=block.name, is_error=is_error, output=output)
+                       name=block.name, is_error=is_error,
+                       error_type=out.error_type, output=out.text)
 
             results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
-                "content": output,
+                "content": out.text,
                 "is_error": is_error,
             })
 

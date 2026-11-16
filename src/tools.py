@@ -13,13 +13,13 @@ behavior, so record any edit in experiments.md.
 """
 
 import json
-from dataclasses import asdict
-from typing import Annotated
+from dataclasses import asdict, dataclass
+from typing import Annotated, Literal, Optional
 
 from anthropic.types import ToolParam
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from store import NoteStore, NoteStoreError
+from store import InvalidNoteIdError, NoteNotFoundError, NoteStore
 
 ID_PATTERN = r"^[a-z0-9-]+$"
 MAX_ID_LENGTH = 100
@@ -109,6 +109,14 @@ TOOLS: list[ToolParam] = [
 ]
 
 
+ErrorType = Literal["unknown_tool", "invalid_arguments", "not_found", "invalid_id"]
+
+@dataclass(frozen=True)
+class ToolOutput:
+    text: str
+    error_type: Optional[ErrorType] = None  
+
+
 def _to_json(obj) -> str:
     # Keep accented letters readable: the model sees "è", not the escape \u00e8.
     return json.dumps(obj, ensure_ascii=False, indent=2)
@@ -125,34 +133,39 @@ def _format_validation_error(name: str, e: ValidationError) -> str:
     return f"Error: invalid arguments for tool '{name}': " + "; ".join(problems)
 
 
-def dispatch(store: NoteStore, name: str, raw_args: dict) -> str:
-    """Run a tool and return its result as text, since the model only reads text.
+def dispatch(store: NoteStore, name: str, raw_args: dict) -> ToolOutput:
+    """Run a tool and return its result as a ToolOutput.
 
     Expected problems (a missing note, a bad id, an unknown tool, invalid
-    arguments) come back as a message starting with "Error:", so the model can
-    fix its call. Anything else is a bug in our code, so we let it crash.
+    arguments) come back as a ToolOutput with an error_type and a text starting
+    with "Error:", so the model can fix its call. Anything else is a bug in our
+    code, so we let it crash.
     """
     if name not in ARGS_MODELS:
-        return f"Error: unknown tool '{name}'. Available tools: {', '.join(ARGS_MODELS)}"
+        return ToolOutput(
+            f"Error: unknown tool '{name}'. Available tools: {', '.join(ARGS_MODELS)}",
+            "unknown_tool",
+        )
 
     # Each branch validates with its own class, so the type checker knows
     # which fields `args` has. The store still checks ids on its own.
     try:
         if name == "search_notes":
             args = SearchNotesArgs.model_validate(raw_args)
-            return _to_json([asdict(r) for r in store.search_notes(args.query)])
+            return ToolOutput(_to_json([asdict(r) for r in store.search_notes(args.query)]))
         if name == "get_note":
             args = GetNoteArgs.model_validate(raw_args)
-            return _to_json(asdict(store.get_note(args.note_id)))
+            return ToolOutput(_to_json(asdict(store.get_note(args.note_id))))
         if name == "delete_note":
             args = DeleteNoteArgs.model_validate(raw_args)
             store.delete_note(args.note_id)
-            return f"Note deleted: {args.note_id}"
+            return ToolOutput(f"Note deleted: {args.note_id}")
     except ValidationError as e:
-        return _format_validation_error(name, e)
-    except NoteStoreError as e:
-        # Covers both NoteNotFoundError and InvalidNoteIdError.
-        return f"Error: {e}"
+        return ToolOutput(_format_validation_error(name, e), "invalid_arguments")
+    except NoteNotFoundError as e:
+        return ToolOutput(f"Error: {e}", "not_found")
+    except InvalidNoteIdError as e:
+        return ToolOutput(f"Error: {e}", "invalid_id")
 
     # In ARGS_MODELS but without a branch above: a bug in our code.
     raise AssertionError(f"no handler for tool '{name}'")
