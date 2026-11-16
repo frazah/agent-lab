@@ -1,14 +1,17 @@
-"""run_agent writes a run_start and a run_end line to the trace, without calling the API."""
+"""run_agent traces every step of a run, and read_trace prints it back.
 
-import json
+A fake client stands in for the API, so these tests cost nothing.
+"""
+
 from types import SimpleNamespace
 
 import agent
+from read_trace import load_events, print_trace
 from tracer import Tracer
 
 
 def _response(stop_reason, content):
-    usage = SimpleNamespace(input_tokens=0, output_tokens=0)
+    usage = SimpleNamespace(input_tokens=100, output_tokens=10)
     return SimpleNamespace(stop_reason=stop_reason, content=content, usage=usage)
 
 
@@ -31,11 +34,7 @@ class FakeClient:
         return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
 
 
-def _read(path):
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-def test_end_turn_writes_start_and_end(store, tmp_path, monkeypatch):
+def test_run_that_ends_with_an_answer(store, tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "client", FakeClient(
         _response("tool_use", [_tool_use("delete_note", {"note_id": store.list_note_ids()[0]})]),
         _response("end_turn", [_text("Fatto.")]),
@@ -45,7 +44,7 @@ def test_end_turn_writes_start_and_end(store, tmp_path, monkeypatch):
 
     agent.run_agent(store, "cancella una nota", tracer)
 
-    events = _read(tracer.path)
+    events = load_events(tracer.path)
     assert [e["type"] for e in events] == [
         "run_start",
         "model_response", "tool_call", "tool_result",
@@ -83,7 +82,7 @@ def test_end_turn_writes_start_and_end(store, tmp_path, monkeypatch):
     assert start["run_id"] == end["run_id"]
 
 
-def test_max_iterations_is_recorded(store, tmp_path, monkeypatch):
+def test_run_that_hits_max_iterations(store, tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "client", FakeClient(
         _response("tool_use", [_tool_use("search_notes", {"query": "x"})]),
     ))
@@ -91,7 +90,7 @@ def test_max_iterations_is_recorded(store, tmp_path, monkeypatch):
 
     agent.run_agent(store, "loop", tracer)
 
-    events = _read(tracer.path)
+    events = load_events(tracer.path)
     start, end = events[0], events[-1]
     # Each of the N steps writes model_response + tool_call + tool_result.
     assert len(events) == 2 + 3 * agent.MAX_ITERATIONS
@@ -99,3 +98,27 @@ def test_max_iterations_is_recorded(store, tmp_path, monkeypatch):
     assert end["steps"] == agent.MAX_ITERATIONS
     assert end["final_text"] is None
     assert len(end["remaining_notes"]) == 18
+
+
+def test_read_trace_prints_the_run(store, tmp_path, monkeypatch, capsys):
+    first, second = store.list_note_ids()[:2]
+    monkeypatch.setattr(agent, "client", FakeClient(
+        _response("tool_use", [
+            _tool_use("delete_note", {"note_id": first}, id="t1"),
+            _tool_use("get_note", {"note_id": "non-esiste"}, id="t2"),
+        ]),
+        _response("end_turn", [_text("Fatto.")]),
+    ))
+    tracer = Tracer(tmp_path / "trace.jsonl")
+    agent.run_agent(store, "cancella una nota", tracer)
+    capsys.readouterr()  # drop what run_agent printed
+
+    print_trace(load_events(tracer.path))
+    out = capsys.readouterr().out
+
+    assert "request:      cancella una nota" in out
+    assert f'delete_note {{"note_id": "{first}"}} -> ok' in out
+    assert 'get_note {"note_id": "non-esiste"} -> not_found' in out
+    assert "tokens: 200 in / 20 out (2 model calls)" in out
+    assert f"deleted: {first}\n" in out
+    assert second not in out

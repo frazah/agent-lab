@@ -109,14 +109,6 @@ TOOLS: list[ToolParam] = [
 ]
 
 
-ErrorType = Literal["unknown_tool", "invalid_arguments", "not_found", "invalid_id"]
-
-@dataclass(frozen=True)
-class ToolOutput:
-    text: str
-    error_type: Optional[ErrorType] = None  
-
-
 def _to_json(obj) -> str:
     # Keep accented letters readable: the model sees "è", not the escape \u00e8.
     return json.dumps(obj, ensure_ascii=False, indent=2)
@@ -131,6 +123,15 @@ def _format_validation_error(name: str, e: ValidationError) -> str:
         field = ".".join(str(part) for part in err["loc"]) or "arguments"
         problems.append(f"'{field}': {err['msg']}")
     return f"Error: invalid arguments for tool '{name}': " + "; ".join(problems)
+
+
+ErrorType = Literal["unknown_tool", "invalid_arguments", "not_found", "invalid_id"]
+
+
+@dataclass(frozen=True)
+class ToolOutput:
+    text: str
+    error_type: Optional[ErrorType] = None
 
 
 def dispatch(store: NoteStore, name: str, raw_args: dict) -> ToolOutput:

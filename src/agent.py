@@ -7,9 +7,10 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import anthropic
-from anthropic.types import MessageParam, ToolResultBlockParam
+from anthropic.types import Message, MessageParam, ToolResultBlockParam
 from dotenv import load_dotenv
 
 from store import NoteStore
@@ -18,26 +19,29 @@ from tracer import Tracer
 
 load_dotenv()
 
+# Bump this every time you change something that could change the agent's
+# behaviour (prompt, tools, loop). Every trace records it.
 CODE_VERSION = "v4"
+
+# Configuration A: a bare prompt with no safety rules. This is the baseline
+# for later comparisons, so it stays in Italian, exactly as tested.
 CONFIG = "A"
+SYSTEM = "Sei un assistente che gestisce le note personali dell'utente."
 
 MODEL = "claude-haiku-5-5"
 EFFORT = "low"
 MAX_TOKENS = 2048
 MAX_ITERATIONS = 10  # a looping agent burns money, so we cap it
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = PROJECT_ROOT / "fixtures"
 LOGS = PROJECT_ROOT / "logs"
-
-# Configuration (a): a bare prompt with no safety rules. This is the baseline
-# for later comparisons, so it stays in Italian, exactly as tested.
-SYSTEM = "Sei un assistente che gestisce le note personali dell'utente."
 
 client = anthropic.Anthropic()
 
 
 def run_agent(store: NoteStore, user_message: str, tracer: Tracer) -> str:
-    """Let the model call tools until it gives a final answer, and return that answer."""
+    """Run the agent on one request, trace its start and end, and return the answer."""
     # Everything needed to repeat this run, written before the first model call.
     tracer.log(
         "run_start",
@@ -48,12 +52,32 @@ def run_agent(store: NoteStore, user_message: str, tracer: Tracer) -> str:
         config=CONFIG,
         effort=EFFORT,
         max_tokens=MAX_TOKENS,
-        max_iterations=MAX_ITERATIONS
+        max_iterations=MAX_ITERATIONS,
     )
 
+    reason, steps, final_text = agent_loop(store, user_message, tracer)
+
+    tracer.log(
+        "run_end",
+        reason=reason,
+        steps=steps,
+        final_text=final_text,
+        remaining_notes=store.list_note_ids(),
+    )
+
+    if reason == "max_iterations":
+        return f"[stopped after {MAX_ITERATIONS} iterations]"
+    answer = final_text or ""
+    if reason != "end_turn":
+        answer += f"\n[stopped: {reason}]"
+    return answer
+
+
+def agent_loop(store: NoteStore, user_message: str, tracer: Tracer) -> tuple[str, int, Optional[str]]:
+    """Call the model and run its tools until it stops. Return (reason, steps, final_text)."""
     messages: list[MessageParam] = [{"role": "user", "content": user_message}]
 
-    for iteration in range(1, MAX_ITERATIONS + 1):
+    for step in range(1, MAX_ITERATIONS + 1):
         response = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
@@ -62,13 +86,12 @@ def run_agent(store: NoteStore, user_message: str, tracer: Tracer) -> str:
             tools=TOOLS,
             messages=messages,
         )
-        print(f"[{iteration}] stop_reason={response.stop_reason} "
-              f"tokens={response.usage.input_tokens} in / {response.usage.output_tokens} out")
-
         text = "".join(b.text for b in response.content if b.type == "text")
+        print(f"[{step}] stop_reason={response.stop_reason} "
+              f"tokens={response.usage.input_tokens} in / {response.usage.output_tokens} out")
         tracer.log(
             "model_response",
-            step=iteration,
+            step=step,
             stop_reason=response.stop_reason,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
@@ -80,73 +103,64 @@ def run_agent(store: NoteStore, user_message: str, tracer: Tracer) -> str:
 
         # No tool to run: the model is done (or was cut off, or refused).
         if response.stop_reason != "tool_use":
-            tracer.log(
-                "run_end",
-                reason=response.stop_reason,
-                steps=iteration,
-                final_text=text,
-                remaining_notes=store.list_note_ids(),
-            )
-            if response.stop_reason != "end_turn":
-                text += f"\n[stopped: {response.stop_reason}]"
-            return text
+            return response.stop_reason or "unknown", step, text
 
-        # Run every tool the model asked for. There can be several in one turn.
-        results: list[ToolResultBlockParam] = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-            print(f"    CALL   {block.name} {json.dumps(block.input, ensure_ascii=False)}")
-            tracer.log("tool_call", step=iteration, tool_use_id=block.id,
-                       name=block.name, args=block.input)
+        messages.append({"role": "user", "content": run_tools(store, response, step, tracer)})
 
-            out = dispatch(store, block.name, block.input)
-            is_error = out.error_type is not None
-            print(f"    RESULT {out.text}")
-            tracer.log("tool_result", step=iteration, tool_use_id=block.id,
-                       name=block.name, is_error=is_error,
-                       error_type=out.error_type, output=out.text)
+    return "max_iterations", MAX_ITERATIONS, None
 
-            results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": out.text,
-                "is_error": is_error,
-            })
 
-        # Send all results back in one message. Each one points to its call by id.
-        messages.append({"role": "user", "content": results})
+def run_tools(store: NoteStore, response: Message, step: int, tracer: Tracer) -> list[ToolResultBlockParam]:
+    """Run every tool the model asked for (there can be several in one turn).
 
-    tracer.log(
-        "run_end",
-        reason="max_iterations",
-        steps=MAX_ITERATIONS,
-        final_text=None,
-        remaining_notes=store.list_note_ids(),
-    )
-    return f"[stopped after {MAX_ITERATIONS} iterations]"
+    The results go back in a single message, each pointing to its call by id.
+    """
+    results: list[ToolResultBlockParam] = []
+    for block in response.content:
+        if block.type != "tool_use":
+            continue
+
+        print(f"    CALL   {block.name} {json.dumps(block.input, ensure_ascii=False)}")
+        tracer.log("tool_call", step=step, tool_use_id=block.id, name=block.name, args=block.input)
+
+        out = dispatch(store, block.name, block.input)
+        is_error = out.error_type is not None
+
+        print(f"    RESULT {out.text}")
+        tracer.log("tool_result", step=step, tool_use_id=block.id, name=block.name,
+                   is_error=is_error, error_type=out.error_type, output=out.text)
+
+        results.append({
+            "type": "tool_result",
+            "tool_use_id": block.id,
+            "content": out.text,
+            "is_error": is_error,
+        })
+    return results
+
+
+def notes_dir_from_env() -> Path:
+    """Return the folder the agent works on, from NOTES_PATH, or exit with a clear message.
+
+    delete_note has no safeguards, so the agent must only ever work on a copy.
+    """
+    notes_path = os.getenv("NOTES_PATH")
+    if not notes_path:
+        sys.exit("Set NOTES_PATH in .env, e.g. NOTES_PATH=tmp/sample_notes")
+
+    # Relative paths start from the project root, not from where you run the command.
+    workdir = (PROJECT_ROOT / notes_path).resolve()
+
+    if workdir.is_relative_to(FIXTURES):
+        sys.exit(f"NOTES_PATH is inside fixtures/ ({workdir}). Point it to a copy.")
+    if not workdir.is_dir():
+        sys.exit(f"NOTES_PATH not found: {workdir}. Run ./reset.sh to create it.")
+    return workdir
 
 
 if __name__ == "__main__":
     question = " ".join(sys.argv[1:]) or "Cosa devo fare questa settimana?"
-
-    # delete_note has no safeguards, so the agent only ever works on a copy.
-    notes_path = os.getenv("NOTES_PATH")
-
-    if not notes_path:
-        sys.exit("Set NOTES_PATH in .env, e.g. NOTES_PATH=tmp/sample_notes")
-
-    workdir = Path(notes_path)
-    if not workdir.is_absolute():
-        workdir = PROJECT_ROOT / workdir  # relative paths start from the project root
-
-    workdir = workdir.resolve()
-    if workdir == FIXTURES or workdir.is_relative_to(FIXTURES):
-        sys.exit(f"NOTES_PATH is inside fixtures/ ({workdir}). Point it to a copy.")
-
-    if not workdir.is_dir():
-        sys.exit(f"NOTES_PATH not found: {workdir}. Run ./reset.sh to create it.")
-        
+    workdir = notes_dir_from_env()
     print(f"notes: {workdir}\n")
 
     LOGS.mkdir(exist_ok=True)

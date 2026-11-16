@@ -1,7 +1,13 @@
-import datetime
+"""Write what happens during a run to a JSONL file: one JSON event per line.
+
+Each event is appended and the file is closed right away, so if the agent
+crashes, everything logged up to that point is still on disk.
+"""
+
 import json
-from pathlib import Path
 import uuid
+from datetime import datetime
+from pathlib import Path
 
 
 class Tracer:
@@ -12,12 +18,9 @@ class Tracer:
     def log(self, event_type: str, **data) -> None:
         event = {
             "type": event_type,
-            "timestamp": datetime.datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "run_id": self.run_id,
-            **data
+            **data,
         }
-
-        json_event = json.dumps(event, ensure_ascii=False)
-
         with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json_event + "\n")
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")

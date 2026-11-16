@@ -11,19 +11,22 @@ Each note is a file named <note_id>.md, with a small header on top:
 from dataclasses import dataclass
 from pathlib import Path
 
+
 class NoteStoreError(Exception):
     """Base class for the errors the store expects. Catch this to catch them all."""
-    pass
+
 
 class NoteNotFoundError(NoteStoreError):
     def __init__(self, note_id: str):
         self.note_id = note_id
         super().__init__(f"Note not found: {note_id}")
 
+
 class InvalidNoteIdError(NoteStoreError):
     def __init__(self, note_id: str):
         self.note_id = note_id
         super().__init__(f"Invalid note ID: {note_id}")
+
 
 @dataclass
 class Note:
@@ -33,11 +36,13 @@ class Note:
     content: str
     date: str
 
+
 @dataclass
 class SearchResult:
     note_id: str
     title: str
     sample: str
+
 
 @dataclass
 class NoteStore:
@@ -56,57 +61,41 @@ class NoteStore:
 
         return file
 
-    def delete_note(self, note_id:str)-> None:
-        self._note_path(note_id=note_id).unlink()
-
-    def get_note(self, note_id: str)-> Note:
-        note = self._note_path(note_id=note_id).read_text()
-
-        # parts[1] is the header, parts[2] the body.
-        parts = note.split("---")
-        frontmatter = parts[1].strip()
-        rows = frontmatter.splitlines()
-        data = {}
-
-        for row in rows:
-            key, value = row.split(": ", 1)
-            data[key] = value
-
-        content = parts[2].strip()    
-        tags = data["tags"].split(", ")
-
-        note_obj= Note(note_id=note_id, title=data["title"], tags=tags, content=content, date=data["date"])
-        return note_obj
-
     def list_note_ids(self) -> list[str]:
         """Return the ids of every note in the folder, sorted so the order is stable."""
         return sorted(file.stem for file in self.path.glob("*.md"))
 
-    def search_notes(self, query: str)-> list[SearchResult]:
+    def get_note(self, note_id: str) -> Note:
+        text = self._note_path(note_id).read_text(encoding="utf-8")
+
+        # "", header, body. maxsplit=2 keeps any "---" inside the body intact.
+        _, header, body = text.split("---", 2)
+
+        fields = {}
+        for row in header.strip().splitlines():
+            key, value = row.split(": ", 1)
+            fields[key] = value
+
+        return Note(
+            note_id=note_id,
+            title=fields["title"],
+            tags=fields["tags"].split(", "),
+            content=body.strip(),
+            date=fields["date"],
+        )
+
+    def search_notes(self, query: str) -> list[SearchResult]:
         """Find notes whose title, body or tags match the query, ignoring case."""
+        query = query.lower()
         results = []
         for note_id in self.list_note_ids():
             note = self.get_note(note_id)
-            query_lower = query.lower()
             # Title and body match on any substring. A tag is a whole label, so
             # the query has to equal it: "palestra" matches, "pales" doesn't.
-            tags_lower = [tag.lower() for tag in note.tags]
-            if (
-                query_lower in note.title.lower()
-                or query_lower in note.content.lower()
-                or query_lower in tags_lower
-            ):
-                results.append(SearchResult(note_id=note.note_id, title=note.title, sample=note.content[:100]))
+            tags = [tag.lower() for tag in note.tags]
+            if query in note.title.lower() or query in note.content.lower() or query in tags:
+                results.append(SearchResult(note.note_id, note.title, sample=note.content[:100]))
         return results
 
-
-if __name__ == "__main__":
-    store = NoteStore(Path("fixtures/base_notes"))
-   
-    search_res = store.search_notes("allenamento")
-    print(f"Found {len(search_res)} results for 'allenamento':")
-    for result in search_res:
-        print(result.note_id,result.title, result.sample)
-        print("----")
-
-
+    def delete_note(self, note_id: str) -> None:
+        self._note_path(note_id).unlink()
