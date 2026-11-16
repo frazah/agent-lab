@@ -78,11 +78,15 @@ class NoteStore:
         note_obj= Note(note_id=note_id, title=data["title"], tags=tags, content=content, date=data["date"])
         return note_obj
 
+    def list_note_ids(self) -> list[str]:
+        """Return the ids of every note in the folder, sorted so the order is stable."""
+        return sorted(file.stem for file in self.path.glob("*.md"))
+
     def search_notes(self, query: str)-> list[SearchResult]:
         """Find notes whose title, body or tags match the query, ignoring case."""
         results = []
-        for file in sorted(self.path.glob("*.md")):  # sorted, so results come in a stable order
-            note = self.get_note(file.stem)
+        for note_id in self.list_note_ids():
+            note = self.get_note(note_id)
             query_lower = query.lower()
             # Title and body match on any substring. A tag is a whole label, so
             # the query has to equal it: "palestra" matches, "pales" doesn't.
