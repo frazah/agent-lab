@@ -1,5 +1,7 @@
 .venv
 .env
-tmp/
+.vscode
+.pytest_cache
 .DS_Store
 logs/
+tmp/
