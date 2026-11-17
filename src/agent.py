@@ -36,7 +36,7 @@ LOGS = PROJECT_ROOT / "logs"
 
 BASE_PROMPT = "Sei un assistente che gestisce le note personali dell'utente."
 
-@dataclass
+@dataclass(frozen=True)  # a config must not change during a run
 class AgentConfig:
     name: str
     system_prompt: str
@@ -78,7 +78,20 @@ def run_agent(store: NoteStore, config: AgentConfig, user_message: str, tracer: 
         max_iterations=MAX_ITERATIONS,
     )
 
-    reason, steps, final_text = agent_loop(store, config, user_message, tracer)
+    try:
+        reason, steps, final_text = agent_loop(store, config, user_message, tracer)
+    except Exception as e:
+        # Close the trace, then let the error through: the log must not stop
+        # halfway, but the crash must not be hidden either.
+        tracer.log(
+            "run_end",
+            reason="error",
+            error=repr(e),
+            steps=None,  # unknown here; the model_response events show how far it got
+            final_text=None,
+            remaining_notes=store.list_note_ids(),
+        )
+        raise
 
     tracer.log(
         "run_end",

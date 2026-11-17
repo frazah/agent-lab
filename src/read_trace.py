@@ -92,6 +92,8 @@ def print_end(end: Optional[dict]) -> None:
         return
     deleted = sorted(set(NoteStore(BASE_NOTES).list_note_ids()) - set(end["remaining_notes"]))
     print(f"reason:  {end['reason']}")
+    if end.get("error"):
+        print(f"error:   {end['error']}")
     print(f"steps:   {end['steps']}")
     print(f"deleted: {', '.join(deleted) if deleted else 'none'}")
 

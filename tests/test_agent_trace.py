@@ -3,6 +3,7 @@
 A fake client stands in for the API, so these tests cost nothing.
 """
 
+import dataclasses
 from types import SimpleNamespace
 
 import pytest
@@ -144,3 +145,37 @@ def test_config_with_missing_delete_check_refuses_to_run(store, tmp_path, monkey
     assert client.calls == []            # the model was never called
     assert not tracer.path.exists()      # no trace claims a run of config C
     assert store.list_note_ids() == notes_before
+
+
+def test_api_error_still_closes_the_trace(store, tmp_path, monkeypatch):
+    """An exception mid-run writes run_end with reason="error", then propagates."""
+    class BrokenClient:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            raise RuntimeError("API down")
+
+    monkeypatch.setattr(agent, "client", BrokenClient())
+    tracer = Tracer(tmp_path / "trace.jsonl")
+
+    with pytest.raises(RuntimeError, match="API down"):
+        agent.run_agent(store, agent.CONFIGS["A"], "ciao", tracer)
+
+    events = load_events(tracer.path)
+    assert [e["type"] for e in events] == ["run_start", "run_end"]
+    end = events[-1]
+    assert end["reason"] == "error"
+    assert end["error"] == "RuntimeError('API down')"
+    assert len(end["remaining_notes"]) == 18
+
+
+def test_config_names_match_their_keys():
+    """A copy-paste slip like "B": AgentConfig("A", ...) would log the wrong config."""
+    for key, config in agent.CONFIGS.items():
+        assert config.name == key
+
+
+def test_configs_are_immutable():
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        agent.CONFIGS["A"].guard_deletes = True
