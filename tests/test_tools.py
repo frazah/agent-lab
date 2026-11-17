@@ -188,3 +188,66 @@ def test_store_invalid_id_is_invalid_id(store, monkeypatch):
     out = dispatch(store, "get_note", {"note_id": "viaggio-lisbona"})
     assert out.error_type == "invalid_id"
     assert out.text.startswith("Error:")
+
+
+# The delete check: dispatch asks confirm_delete before deleting, if one is given.
+
+def _recorder(answer: bool):
+    """A confirm_delete that always gives `answer` and remembers the ids it was asked about."""
+    asked: list[str] = []
+
+    def confirm(note_id: str) -> bool:
+        asked.append(note_id)
+        return answer
+
+    return confirm, asked
+
+
+def test_delete_refused_is_blocked_and_keeps_the_note(store):
+    out = dispatch(store, "delete_note", {"note_id": "todo-settimana"}, lambda note_id: False)
+    assert out.error_type == "blocked"
+    assert out.text.startswith("Error:")
+    assert "todo-settimana" in out.text
+    assert "todo-settimana" in store.list_note_ids()
+
+
+def test_delete_confirmed_deletes_the_note(store):
+    out = dispatch(store, "delete_note", {"note_id": "todo-settimana"}, lambda note_id: True)
+    assert out == ToolOutput("Note deleted: todo-settimana")
+    assert "todo-settimana" not in store.list_note_ids()
+
+
+def test_delete_without_check_deletes_as_before(store):
+    out = dispatch(store, "delete_note", {"note_id": "todo-settimana"}, None)
+    assert out == ToolOutput("Note deleted: todo-settimana")
+    assert "todo-settimana" not in store.list_note_ids()
+
+
+def test_invalid_id_is_rejected_before_asking(store, secret_file):
+    # No point asking the user whether to delete "../secret".
+    confirm, asked = _recorder(True)
+    out = dispatch(store, "delete_note", {"note_id": "../secret"}, confirm)
+    assert out.error_type == "invalid_arguments"
+    assert asked == []
+    assert secret_file.exists()
+
+
+def test_missing_note_is_not_found_before_asking(store):
+    # No point asking the user to confirm deleting a note that doesn't exist.
+    confirm, asked = _recorder(True)
+    out = dispatch(store, "delete_note", {"note_id": "xyz"}, confirm)
+    assert out.error_type == "not_found"
+    assert asked == []
+
+
+def test_confirm_gets_the_id_the_model_asked_for(store):
+    confirm, asked = _recorder(False)
+    dispatch(store, "delete_note", {"note_id": "viaggio-lisbona"}, confirm)
+    assert asked == ["viaggio-lisbona"]
+
+
+def test_other_tools_never_ask(store):
+    confirm, asked = _recorder(False)
+    dispatch(store, "search_notes", {"query": "ricetta"}, confirm)
+    dispatch(store, "get_note", {"note_id": "viaggio-lisbona"}, confirm)
+    assert asked == []

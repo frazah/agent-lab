@@ -53,11 +53,29 @@ def outcome(result: Optional[dict]) -> str:
     return result.get("error_type") or "error"
 
 
+def confirmations_by_call(events: list[dict]) -> dict[str, dict]:
+    """Match each confirmation event to its tool_call.
+
+    A confirmation has no tool_use_id: the confirm function doesn't know it.
+    But it is logged while its delete_note runs, so it always comes right
+    after that call's tool_call event.
+    """
+    matched = {}
+    last_call_id = None
+    for event in events:
+        if event["type"] == "tool_call":
+            last_call_id = event["tool_use_id"]
+        elif event["type"] == "confirmation" and last_call_id is not None:
+            matched[last_call_id] = event
+    return matched
+
+
 def print_steps(events: list[dict]) -> None:
     print("\n== Steps")
     responses = of_type(events, "model_response")
     calls = of_type(events, "tool_call")
     results = {e["tool_use_id"]: e for e in of_type(events, "tool_result")}
+    confirmations = confirmations_by_call(events)
 
     if not responses:
         print("(no model_response events: trace written before they were logged)")
@@ -72,6 +90,10 @@ def print_steps(events: list[dict]) -> None:
         for call in step_calls:
             args = json.dumps(call["args"], ensure_ascii=False)
             print(f"    {call['name']} {args} -> {outcome(results.get(call['tool_use_id']))}")
+            confirmation = confirmations.get(call["tool_use_id"])
+            if confirmation is not None:
+                answer = "yes" if confirmation["approved"] else "no"
+                print(f"        confirm '{confirmation['title']}': {answer}")
 
 
 def print_cost(events: list[dict]) -> None:

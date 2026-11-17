@@ -35,4 +35,4 @@ NOTES_PATH=tmp/sample_notes
 .venv/bin/python -m pytest                  # tests
 ```
 
-`delete_note` has no safeguards, so the agent only runs on the copy in `NOTES_PATH` and refuses to start if it points inside `fixtures/`.
+`delete_note` has no safeguard in the code in configs A and B (C asks you on the terminal before each delete), so the agent only runs on the copy in `NOTES_PATH` and refuses to start if it points inside `fixtures/`.

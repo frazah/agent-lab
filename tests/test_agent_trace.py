@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 import agent
-from read_trace import load_events, print_trace
+from read_trace import load_events, of_type, print_trace
 from tracer import Tracer
 
 
@@ -132,19 +132,68 @@ def test_read_trace_prints_the_run(store, tmp_path, monkeypatch, capsys):
     assert second not in out
 
 
-def test_config_with_missing_delete_check_refuses_to_run(store, tmp_path, monkeypatch):
-    """Fail closed: config C must not run until its delete check exists."""
+def test_guarded_config_without_confirm_refuses_to_run(store, tmp_path, monkeypatch):
+    """Fail closed: config C must not run without someone to confirm deletes."""
     client = FakeClient(_response("end_turn", [_text("Fatto.")]))
     monkeypatch.setattr(agent, "client", client)
     tracer = Tracer(tmp_path / "trace.jsonl")
     notes_before = store.list_note_ids()
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError):
         agent.run_agent(store, agent.CONFIGS["C"], "cancella una nota", tracer)
 
     assert client.calls == []            # the model was never called
     assert not tracer.path.exists()      # no trace claims a run of config C
     assert store.list_note_ids() == notes_before
+
+
+def _delete_then_stop(note_id):
+    return FakeClient(
+        _response("tool_use", [_tool_use("delete_note", {"note_id": note_id})]),
+        _response("end_turn", [_text("Fatto.")]),
+    )
+
+
+def test_config_c_refused_delete_is_blocked(store, tmp_path, monkeypatch):
+    target = "todo-settimana"
+    monkeypatch.setattr(agent, "client", _delete_then_stop(target))
+    tracer = Tracer(tmp_path / "trace.jsonl")
+    asked = []
+
+    def refuse(note_id):
+        asked.append(note_id)
+        return False
+
+    agent.run_agent(store, agent.CONFIGS["C"], "cancella", tracer, refuse)
+
+    result = of_type(load_events(tracer.path), "tool_result")[0]
+    assert result["error_type"] == "blocked"
+    assert asked == [target]
+    assert target in store.list_note_ids()
+
+
+def test_config_c_confirmed_delete_goes_through(store, tmp_path, monkeypatch):
+    target = "todo-settimana"
+    monkeypatch.setattr(agent, "client", _delete_then_stop(target))
+    tracer = Tracer(tmp_path / "trace.jsonl")
+
+    agent.run_agent(store, agent.CONFIGS["C"], "cancella", tracer, lambda note_id: True)
+
+    assert target not in store.list_note_ids()
+
+
+def test_config_a_ignores_confirm(store, tmp_path, monkeypatch):
+    """Only the config turns the check on: A deletes without asking, even if given a function."""
+    target = "todo-settimana"
+    monkeypatch.setattr(agent, "client", _delete_then_stop(target))
+    tracer = Tracer(tmp_path / "trace.jsonl")
+
+    def must_not_be_called(note_id):
+        raise AssertionError("config A asked for a confirmation")
+
+    agent.run_agent(store, agent.CONFIGS["A"], "cancella", tracer, must_not_be_called)
+
+    assert target not in store.list_note_ids()
 
 
 def test_api_error_still_closes_the_trace(store, tmp_path, monkeypatch):
@@ -179,3 +228,49 @@ def test_config_names_match_their_keys():
 def test_configs_are_immutable():
     with pytest.raises(dataclasses.FrozenInstanceError):
         agent.CONFIGS["A"].guard_deletes = True
+
+
+def test_traced_confirm_logs_the_answer_with_the_title(store, tmp_path):
+    tracer = Tracer(tmp_path / "trace.jsonl")
+    asked = []
+
+    def ask(note_id, title):
+        asked.append((note_id, title))
+        return False
+
+    confirm = agent.traced_confirm(store, tracer, ask)
+
+    assert confirm("viaggio-lisbona") is False   # the answer passes through unchanged
+    title = store.get_note("viaggio-lisbona").title
+    assert asked == [("viaggio-lisbona", title)]  # the user saw the title, not just the id
+    [event] = load_events(tracer.path)
+    assert event["type"] == "confirmation"
+    assert event["note_id"] == "viaggio-lisbona"
+    assert event["title"] == title
+    assert event["approved"] is False
+
+
+def test_read_trace_shows_confirmations(store, tmp_path, monkeypatch, capsys):
+    kept, deleted = store.list_note_ids()[:2]
+    monkeypatch.setattr(agent, "client", FakeClient(
+        _response("tool_use", [
+            _tool_use("delete_note", {"note_id": kept}, id="t1"),
+            _tool_use("delete_note", {"note_id": deleted}, id="t2"),
+        ]),
+        _response("end_turn", [_text("Fatto.")]),
+    ))
+    tracer = Tracer(tmp_path / "trace.jsonl")
+    confirm = agent.traced_confirm(store, tracer, lambda note_id, title: note_id == deleted)
+    kept_title = store.get_note(kept).title
+    deleted_title = store.get_note(deleted).title
+
+    agent.run_agent(store, agent.CONFIGS["C"], "cancella", tracer, confirm)
+    capsys.readouterr()
+
+    print_trace(load_events(tracer.path))
+    out = capsys.readouterr().out
+
+    assert f'delete_note {{"note_id": "{kept}"}} -> blocked\n' \
+           f"        confirm '{kept_title}': no\n" in out
+    assert f'delete_note {{"note_id": "{deleted}"}} -> ok\n' \
+           f"        confirm '{deleted_title}': yes\n" in out

@@ -14,7 +14,7 @@ behavior, so record any edit in experiments.md.
 
 import json
 from dataclasses import asdict, dataclass
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Callable, Literal, Optional
 
 from anthropic.types import ToolParam
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -125,7 +125,10 @@ def _format_validation_error(name: str, e: ValidationError) -> str:
     return f"Error: invalid arguments for tool '{name}': " + "; ".join(problems)
 
 
-ErrorType = Literal["unknown_tool", "invalid_arguments", "not_found", "invalid_id"]
+ErrorType = Literal["unknown_tool", "invalid_arguments", "not_found", "invalid_id", "blocked"]
+
+# Asked before every delete: given a note id, True means go ahead, False means stop.
+ConfirmDelete = Callable[[str], bool]
 
 
 @dataclass(frozen=True)
@@ -134,13 +137,23 @@ class ToolOutput:
     error_type: Optional[ErrorType] = None
 
 
-def dispatch(store: NoteStore, name: str, raw_args: dict) -> ToolOutput:
+def dispatch(
+    store: NoteStore,
+    name: str,
+    raw_args: dict,
+    confirm_delete: Optional[ConfirmDelete] = None,
+) -> ToolOutput:
     """Run a tool and return its result as a ToolOutput.
 
     Expected problems (a missing note, a bad id, an unknown tool, invalid
     arguments) come back as a ToolOutput with an error_type and a text starting
     with "Error:", so the model can fix its call. Anything else is a bug in our
     code, so we let it crash.
+
+    confirm_delete is the delete check. With None, delete_note deletes as asked.
+    With a function, delete_note asks it first (only for a valid id of a note
+    that exists) and deletes only on True; on False nothing is deleted and the
+    error_type is "blocked".
     """
     if name not in ARGS_MODELS:
         return ToolOutput(
@@ -159,6 +172,15 @@ def dispatch(store: NoteStore, name: str, raw_args: dict) -> ToolOutput:
             return ToolOutput(_to_json(asdict(store.get_note(args.note_id))))
         if name == "delete_note":
             args = DeleteNoteArgs.model_validate(raw_args)
+            # Don't ask the user about a note that isn't there: not_found right away.
+            if args.note_id not in store.list_note_ids():
+                raise NoteNotFoundError(args.note_id)
+            # The narrowest point: the id is valid, the note exists, nothing is deleted yet.
+            if confirm_delete is not None and not confirm_delete(args.note_id):
+                return ToolOutput(
+                    f"Error: the user did not confirm the deletion of {args.note_id}.",
+                    "blocked",
+                )
             store.delete_note(args.note_id)
             return ToolOutput(f"Note deleted: {args.note_id}")
     except ValidationError as e:
