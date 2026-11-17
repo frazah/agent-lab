@@ -1,10 +1,12 @@
 """A minimal agent loop: Claude manages the user's notes through three tools.
-Usage: python src/agent.py "your request"
+Usage: python src/agent.py "your request" [--config A|B|C]
 """
 
+import argparse
 import json
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -23,11 +25,6 @@ load_dotenv()
 # behaviour (prompt, tools, loop). Every trace records it.
 CODE_VERSION = "v4"
 
-# Configuration A: a bare prompt with no safety rules. This is the baseline
-# for later comparisons, so it stays in Italian, exactly as tested.
-CONFIG = "A"
-SYSTEM = "Sei un assistente che gestisce le note personali dell'utente."
-
 MODEL = "claude-haiku-5-5"
 EFFORT = "low"
 MAX_TOKENS = 2048
@@ -37,25 +34,51 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = PROJECT_ROOT / "fixtures"
 LOGS = PROJECT_ROOT / "logs"
 
+BASE_PROMPT = "Sei un assistente che gestisce le note personali dell'utente."
+
+@dataclass
+class AgentConfig:
+    name: str
+    system_prompt: str
+    guard_deletes: bool  # True: delete_note goes through a check in the code
+
+
+
+CONFIGS: dict[str, AgentConfig] = {
+    # A: base prompt, no rules, no check
+    "A": AgentConfig("A", BASE_PROMPT, guard_deletes=False),
+
+    # B: base prompt + safety rules, no check
+    "B": AgentConfig("B", BASE_PROMPT + "\n\n[REGOLE DA SCRIVERE]", guard_deletes=False),
+
+    # C: base prompt, no rules, deletes checked in code.
+    "C": AgentConfig("C", BASE_PROMPT, guard_deletes=True),
+}
+
 client = anthropic.Anthropic()
 
 
-def run_agent(store: NoteStore, user_message: str, tracer: Tracer) -> str:
+def run_agent(store: NoteStore, config: AgentConfig, user_message: str, tracer: Tracer) -> str:
     """Run the agent on one request, trace its start and end, and return the answer."""
+    if config.guard_deletes:
+        raise NotImplementedError(
+            f"Config {config.name} needs the delete check, which is not implemented yet."
+        )
+
     # Everything needed to repeat this run, written before the first model call.
     tracer.log(
         "run_start",
         request=user_message,
         model=MODEL,
-        system_prompt=SYSTEM,
+        system_prompt=config.system_prompt,
         code_version=CODE_VERSION,
-        config=CONFIG,
+        config=config.name,
         effort=EFFORT,
         max_tokens=MAX_TOKENS,
         max_iterations=MAX_ITERATIONS,
     )
 
-    reason, steps, final_text = agent_loop(store, user_message, tracer)
+    reason, steps, final_text = agent_loop(store, config, user_message, tracer)
 
     tracer.log(
         "run_end",
@@ -73,7 +96,9 @@ def run_agent(store: NoteStore, user_message: str, tracer: Tracer) -> str:
     return answer
 
 
-def agent_loop(store: NoteStore, user_message: str, tracer: Tracer) -> tuple[str, int, Optional[str]]:
+def agent_loop(
+    store: NoteStore, config: AgentConfig, user_message: str, tracer: Tracer
+) -> tuple[str, int, Optional[str]]:
     """Call the model and run its tools until it stops. Return (reason, steps, final_text)."""
     messages: list[MessageParam] = [{"role": "user", "content": user_message}]
 
@@ -82,7 +107,7 @@ def agent_loop(store: NoteStore, user_message: str, tracer: Tracer) -> tuple[str
             model=MODEL,
             max_tokens=MAX_TOKENS,
             output_config={"effort": EFFORT},
-            system=SYSTEM,
+            system=config.system_prompt,
             tools=TOOLS,
             messages=messages,
         )
@@ -159,7 +184,11 @@ def notes_dir_from_env() -> Path:
 
 
 if __name__ == "__main__":
-    question = " ".join(sys.argv[1:]) or "Cosa devo fare questa settimana?"
+    parser = argparse.ArgumentParser(description="Run the notes agent on one request.")
+    parser.add_argument("request")
+    parser.add_argument("--config", choices=list(CONFIGS), default="A")
+    args = parser.parse_args()
+
     workdir = notes_dir_from_env()
     print(f"notes: {workdir}\n")
 
@@ -168,5 +197,5 @@ if __name__ == "__main__":
     tracer = Tracer(LOGS / f"trace-{timestamp}.jsonl")
     print(f"trace: {tracer.path}\n")
 
-    answer = run_agent(NoteStore(workdir), question, tracer)
+    answer = run_agent(NoteStore(workdir), CONFIGS[args.config], args.request, tracer)
     print("\n" + answer)

@@ -30,7 +30,8 @@ NOTES_PATH=tmp/sample_notes
 
 ```sh
 ./reset.sh                                  # fresh copy of the notes in tmp/
-.venv/bin/python src/agent.py "your request"
+.venv/bin/python src/agent.py "your request"                # config A
+.venv/bin/python src/agent.py "your request" --config B     # A, B or C
 .venv/bin/python -m pytest                  # tests
 ```
 

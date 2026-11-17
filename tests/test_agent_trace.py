@@ -5,6 +5,8 @@ A fake client stands in for the API, so these tests cost nothing.
 
 from types import SimpleNamespace
 
+import pytest
+
 import agent
 from read_trace import load_events, print_trace
 from tracer import Tracer
@@ -29,20 +31,24 @@ class FakeClient:
     def __init__(self, *responses):
         self.responses = list(responses)
         self.messages = self
+        self.calls = []  # the kwargs of every create() call, to check what the agent sent
 
     def create(self, **kwargs):
+        self.calls.append(kwargs)
         return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
 
 
 def test_run_that_ends_with_an_answer(store, tmp_path, monkeypatch):
-    monkeypatch.setattr(agent, "client", FakeClient(
+    client = FakeClient(
         _response("tool_use", [_tool_use("delete_note", {"note_id": store.list_note_ids()[0]})]),
         _response("end_turn", [_text("Fatto.")]),
-    ))
+    )
+    monkeypatch.setattr(agent, "client", client)
     tracer = Tracer(tmp_path / "trace.jsonl")
     deleted = store.list_note_ids()[0]
+    config = agent.CONFIGS["B"]  # not A, so the test can tell the config was really used
 
-    agent.run_agent(store, "cancella una nota", tracer)
+    agent.run_agent(store, config, "cancella una nota", tracer)
 
     events = load_events(tracer.path)
     assert [e["type"] for e in events] == [
@@ -69,9 +75,10 @@ def test_run_that_ends_with_an_answer(store, tmp_path, monkeypatch):
     assert start["type"] == "run_start"
     assert start["request"] == "cancella una nota"
     assert start["model"] == agent.MODEL
-    assert start["system_prompt"] == agent.SYSTEM
+    assert start["system_prompt"] == config.system_prompt
     assert start["code_version"] == agent.CODE_VERSION
-    assert start["config"] == "A"
+    assert start["config"] == "B"
+    assert all(call["system"] == config.system_prompt for call in client.calls)
 
     assert end["type"] == "run_end"
     assert end["reason"] == "end_turn"
@@ -88,7 +95,7 @@ def test_run_that_hits_max_iterations(store, tmp_path, monkeypatch):
     ))
     tracer = Tracer(tmp_path / "trace.jsonl")
 
-    agent.run_agent(store, "loop", tracer)
+    agent.run_agent(store, agent.CONFIGS["A"], "loop", tracer)
 
     events = load_events(tracer.path)
     start, end = events[0], events[-1]
@@ -110,7 +117,7 @@ def test_read_trace_prints_the_run(store, tmp_path, monkeypatch, capsys):
         _response("end_turn", [_text("Fatto.")]),
     ))
     tracer = Tracer(tmp_path / "trace.jsonl")
-    agent.run_agent(store, "cancella una nota", tracer)
+    agent.run_agent(store, agent.CONFIGS["A"], "cancella una nota", tracer)
     capsys.readouterr()  # drop what run_agent printed
 
     print_trace(load_events(tracer.path))
@@ -122,3 +129,18 @@ def test_read_trace_prints_the_run(store, tmp_path, monkeypatch, capsys):
     assert "tokens: 200 in / 20 out (2 model calls)" in out
     assert f"deleted: {first}\n" in out
     assert second not in out
+
+
+def test_config_with_missing_delete_check_refuses_to_run(store, tmp_path, monkeypatch):
+    """Fail closed: config C must not run until its delete check exists."""
+    client = FakeClient(_response("end_turn", [_text("Fatto.")]))
+    monkeypatch.setattr(agent, "client", client)
+    tracer = Tracer(tmp_path / "trace.jsonl")
+    notes_before = store.list_note_ids()
+
+    with pytest.raises(NotImplementedError):
+        agent.run_agent(store, agent.CONFIGS["C"], "cancella una nota", tracer)
+
+    assert client.calls == []            # the model was never called
+    assert not tracer.path.exists()      # no trace claims a run of config C
+    assert store.list_note_ids() == notes_before
