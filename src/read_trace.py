@@ -12,7 +12,7 @@ from store import NoteStore
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOGS = PROJECT_ROOT / "logs"
-# The notes every run starts from (reset.sh copies them): deleted = these - remaining.
+
 BASE_NOTES = PROJECT_ROOT / "fixtures" / "base_notes"
 
 
@@ -25,7 +25,6 @@ def latest_trace() -> Path:
     traces = list(LOGS.glob("trace-*.jsonl"))
     if not traces:
         sys.exit(f"No traces in {LOGS}")
-    # The names hold date and time, so alphabetical order is chronological order.
     return max(traces)
 
 
@@ -55,7 +54,6 @@ def outcome(result: Optional[dict]) -> str:
 
 def confirmations_by_call(events: list[dict]) -> dict[str, dict]:
     """Match each confirmation event to its tool_call.
-
     A confirmation has no tool_use_id: the confirm function doesn't know it.
     But it is logged while its delete_note runs, so it always comes right
     after that call's tool_call event.

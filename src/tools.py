@@ -167,9 +167,11 @@ def dispatch(
         if name == "search_notes":
             args = SearchNotesArgs.model_validate(raw_args)
             return ToolOutput(_to_json([asdict(r) for r in store.search_notes(args.query)]))
+        
         if name == "get_note":
             args = GetNoteArgs.model_validate(raw_args)
             return ToolOutput(_to_json(asdict(store.get_note(args.note_id))))
+        
         if name == "delete_note":
             args = DeleteNoteArgs.model_validate(raw_args)
             # Don't ask the user about a note that isn't there: not_found right away.
@@ -183,6 +185,7 @@ def dispatch(
                 )
             store.delete_note(args.note_id)
             return ToolOutput(f"Note deleted: {args.note_id}")
+        
     except ValidationError as e:
         return ToolOutput(_format_validation_error(name, e), "invalid_arguments")
     except NoteNotFoundError as e:

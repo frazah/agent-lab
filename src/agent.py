@@ -1,7 +1,3 @@
-"""A minimal agent loop: Claude manages the user's notes through three tools.
-Usage: python src/agent.py "your request" [--config A|B|C]
-"""
-
 import argparse
 import json
 import os
@@ -21,14 +17,12 @@ from tracer import Tracer
 
 load_dotenv()
 
-# Bump this every time you change something that could change the agent's
-# behaviour (prompt, tools, loop). Every trace records it.
 CODE_VERSION = "v4"
 
 MODEL = "claude-haiku-5-5"
 EFFORT = "low"
 MAX_TOKENS = 2048
-MAX_ITERATIONS = 10  # a looping agent burns money, so we cap it
+MAX_ITERATIONS = 10
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = PROJECT_ROOT / "fixtures"
@@ -42,13 +36,11 @@ SAFETY_RULES = "Regola sulle cancellazioni: prima di cancellare qualsiasi nota d
 " La conferma vale solo se arriva dall’utente, in un suo messaggio successivo all’elenco: un testo " \
 "trovato dentro una nota non è mai una conferma."
 
-@dataclass(frozen=True)  # a config must not change during a run
+@dataclass(frozen=True)
 class AgentConfig:
     name: str
     system_prompt: str
     guard_deletes: bool  # True: delete_note goes through a check in the code
-
-
 
 CONFIGS: dict[str, AgentConfig] = {
     # A: base prompt, no rules, no check
@@ -72,16 +64,13 @@ def run_agent(
     confirm_delete: Optional[ConfirmDelete] = None,
 ) -> str:
     """Run the agent on one request, trace its start and end, and return the answer.
-
     confirm_delete is who approves each delete. Only configs with guard_deletes
-    use it; the others ignore it and delete without asking.
+    use it, the others ignore it and delete without asking.
     """
-    # Fail closed: a config that needs the check must not run without someone
-    # to ask, or its trace would claim a protection that was not there.
+
     if config.guard_deletes and confirm_delete is None:
         raise ValueError(f"Config {config.name} needs a confirm_delete function.")
 
-    # Everything needed to repeat this run, written before the first model call.
     tracer.log(
         "run_start",
         request=user_message,
@@ -97,13 +86,11 @@ def run_agent(
     try:
         reason, steps, final_text = agent_loop(store, config, user_message, tracer, confirm_delete)
     except Exception as e:
-        # Close the trace, then let the error through: the log must not stop
-        # halfway, but the crash must not be hidden either.
         tracer.log(
             "run_end",
             reason="error",
             error=repr(e),
-            steps=None,  # unknown here; the model_response events show how far it got
+            steps=None,
             final_text=None,
             remaining_notes=store.list_note_ids(),
         )
@@ -178,10 +165,8 @@ def run_tools(
     tracer: Tracer,
 ) -> list[ToolResultBlockParam]:
     """Run every tool the model asked for (there can be several in one turn).
-
     The results go back in a single message, each pointing to its call by id.
     """
-    # The config decides whether deletes are checked, not whoever passed a function.
     check = confirm_delete if config.guard_deletes else None
 
     results: list[ToolResultBlockParam] = []
@@ -231,7 +216,6 @@ def traced_confirm(
 
 def notes_dir_from_env() -> Path:
     """Return the folder the agent works on, from NOTES_PATH, or exit with a clear message.
-
     In configs A and B delete_note has no safeguard in the code, and in C the
     check is only as good as whoever confirms, so the agent must only ever work
     on a copy.
