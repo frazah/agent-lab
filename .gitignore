@@ -3,5 +3,6 @@
 .vscode
 .pytest_cache
 .DS_Store
+.gitattributes
 logs/
 tmp/
