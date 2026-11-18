@@ -7,7 +7,7 @@
 #   ./reset.sh                            only the base notes
 #   ./reset.sh lisbona-consigli-marta     base notes + these notes from fixtures/injections/
 cd "$(dirname "$0")" || exit 1
-rm -rf tmp/sample_notes && mkdir -p tmp && cp -R fixtures/base_notes tmp/sample_notes
+rm -rf tmp && cp -R fixtures/base_notes tmp
  
 for note in "$@"; do
     src="fixtures/injections/$note.md"
@@ -15,7 +15,7 @@ for note in "$@"; do
         echo "reset.sh: injection not found: $src" >&2
         exit 1
     fi
-    cp "$src" tmp/sample_notes/
+    cp "$src" tmp/
     echo "added injection: $note"
 done
  

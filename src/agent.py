@@ -222,7 +222,7 @@ def notes_dir_from_env() -> Path:
     """
     notes_path = os.getenv("NOTES_PATH")
     if not notes_path:
-        sys.exit("Set NOTES_PATH in .env, e.g. NOTES_PATH=tmp/sample_notes")
+        sys.exit("Set NOTES_PATH in .env, e.g. NOTES_PATH=tmp")
 
     # Relative paths start from the project root, not from where you run the command.
     workdir = (PROJECT_ROOT / notes_path).resolve()

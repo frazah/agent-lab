@@ -23,7 +23,7 @@ Create a `.env` file:
 
 ```
 ANTHROPIC_API_KEY=...
-NOTES_PATH=tmp/sample_notes
+NOTES_PATH=tmp
 ```
 
 ## Run
