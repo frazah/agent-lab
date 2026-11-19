@@ -1,48 +1,22 @@
-"""run_agent traces every step of a run, and read_trace prints it back.
+"""run_agent logs every step of a run, and read_trace prints it back.
 
-A fake client stands in for the API, so these tests cost nothing.
+A fake model stands in for the API, so these tests cost nothing.
 """
 
 import dataclasses
-from types import SimpleNamespace
 
 import pytest
 
 import agent
-from read_trace import load_events, of_type, print_trace
-from tracer import Tracer
-
-
-def _response(stop_reason, content):
-    usage = SimpleNamespace(input_tokens=100, output_tokens=10)
-    return SimpleNamespace(stop_reason=stop_reason, content=content, usage=usage)
-
-
-def _text(text):
-    return SimpleNamespace(type="text", text=text)
-
-
-def _tool_use(name, tool_input, id="t1"):
-    return SimpleNamespace(type="tool_use", name=name, input=tool_input, id=id)
-
-
-class FakeClient:
-    """Returns the queued responses one per call; repeats the last one forever."""
-
-    def __init__(self, *responses):
-        self.responses = list(responses)
-        self.messages = self
-        self.calls = []  # the kwargs of every create() call, to check what the agent sent
-
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        return self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
+from helpers import BrokenClient, FakeClient, delete_then_answer, response, text_block, tool_use_block
+from read_trace import of_type, print_trace
+from tracer import Tracer, load_events
 
 
 def test_run_that_ends_with_an_answer(store, tmp_path, monkeypatch):
     client = FakeClient(
-        _response("tool_use", [_tool_use("delete_note", {"note_id": store.list_note_ids()[0]})]),
-        _response("end_turn", [_text("Fatto.")]),
+        response("tool_use", [tool_use_block("delete_note", {"note_id": store.list_note_ids()[0]})]),
+        response("end_turn", [text_block("Fatto.")]),
     )
     monkeypatch.setattr(agent, "client", client)
     tracer = Tracer(tmp_path / "trace.jsonl")
@@ -92,7 +66,7 @@ def test_run_that_ends_with_an_answer(store, tmp_path, monkeypatch):
 
 def test_run_that_hits_max_iterations(store, tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "client", FakeClient(
-        _response("tool_use", [_tool_use("search_notes", {"query": "x"})]),
+        response("tool_use", [tool_use_block("search_notes", {"query": "x"})]),
     ))
     tracer = Tracer(tmp_path / "trace.jsonl")
 
@@ -111,15 +85,15 @@ def test_run_that_hits_max_iterations(store, tmp_path, monkeypatch):
 def test_read_trace_prints_the_run(store, tmp_path, monkeypatch, capsys):
     first, second = store.list_note_ids()[:2]
     monkeypatch.setattr(agent, "client", FakeClient(
-        _response("tool_use", [
-            _tool_use("delete_note", {"note_id": first}, id="t1"),
-            _tool_use("get_note", {"note_id": "non-esiste"}, id="t2"),
+        response("tool_use", [
+            tool_use_block("delete_note", {"note_id": first}, id="t1"),
+            tool_use_block("get_note", {"note_id": "non-esiste"}, id="t2"),
         ]),
-        _response("end_turn", [_text("Fatto.")]),
+        response("end_turn", [text_block("Fatto.")]),
     ))
     tracer = Tracer(tmp_path / "trace.jsonl")
     agent.run_agent(store, agent.CONFIGS["A"], "cancella una nota", tracer)
-    capsys.readouterr()  # drop what run_agent printed
+    capsys.readouterr()   # drop what run_agent printed
 
     print_trace(load_events(tracer.path))
     out = capsys.readouterr().out
@@ -134,7 +108,7 @@ def test_read_trace_prints_the_run(store, tmp_path, monkeypatch, capsys):
 
 def test_guarded_config_without_confirm_refuses_to_run(store, tmp_path, monkeypatch):
     """Fail closed: config C must not run without someone to confirm deletes."""
-    client = FakeClient(_response("end_turn", [_text("Fatto.")]))
+    client = FakeClient(response("end_turn", [text_block("Fatto.")]))
     monkeypatch.setattr(agent, "client", client)
     tracer = Tracer(tmp_path / "trace.jsonl")
     notes_before = store.list_note_ids()
@@ -147,16 +121,9 @@ def test_guarded_config_without_confirm_refuses_to_run(store, tmp_path, monkeypa
     assert store.list_note_ids() == notes_before
 
 
-def _delete_then_stop(note_id):
-    return FakeClient(
-        _response("tool_use", [_tool_use("delete_note", {"note_id": note_id})]),
-        _response("end_turn", [_text("Fatto.")]),
-    )
-
-
 def test_config_c_refused_delete_is_blocked(store, tmp_path, monkeypatch):
     target = "todo-settimana"
-    monkeypatch.setattr(agent, "client", _delete_then_stop(target))
+    monkeypatch.setattr(agent, "client", delete_then_answer(target))
     tracer = Tracer(tmp_path / "trace.jsonl")
     asked = []
 
@@ -174,7 +141,7 @@ def test_config_c_refused_delete_is_blocked(store, tmp_path, monkeypatch):
 
 def test_config_c_confirmed_delete_goes_through(store, tmp_path, monkeypatch):
     target = "todo-settimana"
-    monkeypatch.setattr(agent, "client", _delete_then_stop(target))
+    monkeypatch.setattr(agent, "client", delete_then_answer(target))
     tracer = Tracer(tmp_path / "trace.jsonl")
 
     agent.run_agent(store, agent.CONFIGS["C"], "cancella", tracer, lambda note_id: True)
@@ -185,7 +152,7 @@ def test_config_c_confirmed_delete_goes_through(store, tmp_path, monkeypatch):
 def test_config_a_ignores_confirm(store, tmp_path, monkeypatch):
     """Only the config turns the check on: A deletes without asking, even if given a function."""
     target = "todo-settimana"
-    monkeypatch.setattr(agent, "client", _delete_then_stop(target))
+    monkeypatch.setattr(agent, "client", delete_then_answer(target))
     tracer = Tracer(tmp_path / "trace.jsonl")
 
     def must_not_be_called(note_id):
@@ -198,13 +165,6 @@ def test_config_a_ignores_confirm(store, tmp_path, monkeypatch):
 
 def test_api_error_still_closes_the_trace(store, tmp_path, monkeypatch):
     """An exception mid-run writes run_end with reason="error", then propagates."""
-    class BrokenClient:
-        def __init__(self):
-            self.messages = self
-
-        def create(self, **kwargs):
-            raise RuntimeError("API down")
-
     monkeypatch.setattr(agent, "client", BrokenClient())
     tracer = Tracer(tmp_path / "trace.jsonl")
 
@@ -253,11 +213,11 @@ def test_traced_confirm_logs_the_answer_with_the_title(store, tmp_path):
 def test_read_trace_shows_confirmations(store, tmp_path, monkeypatch, capsys):
     kept, deleted = store.list_note_ids()[:2]
     monkeypatch.setattr(agent, "client", FakeClient(
-        _response("tool_use", [
-            _tool_use("delete_note", {"note_id": kept}, id="t1"),
-            _tool_use("delete_note", {"note_id": deleted}, id="t2"),
+        response("tool_use", [
+            tool_use_block("delete_note", {"note_id": kept}, id="t1"),
+            tool_use_block("delete_note", {"note_id": deleted}, id="t2"),
         ]),
-        _response("end_turn", [_text("Fatto.")]),
+        response("end_turn", [text_block("Fatto.")]),
     ))
     tracer = Tracer(tmp_path / "trace.jsonl")
     confirm = agent.traced_confirm(store, tracer, lambda note_id, title: note_id == deleted)

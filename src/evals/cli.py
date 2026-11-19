@@ -1,9 +1,10 @@
-"""Command line for the harness: choose what to run, see the plan, run it, summarise it.
+"""Command line for the harness: choose what to run, show the plan, run it, summarise it.
 
-Usage (from the project root):
-    python src/run_evals.py --dry-run                      # show the plan, call nothing
+From the project root:
+
+    python src/run_evals.py --dry-run                 # show the plan, call nothing
     python src/run_evals.py --scenarios read-palestra --configs A --reps 1
-    python src/run_evals.py --configs A B C --reps 3
+    python src/run_evals.py --reps 3
 """
 
 import argparse
@@ -13,22 +14,21 @@ import subprocess
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import agent
 from evals import harness
-from evals.scenarios import CONFIG_NAMES, load_scenarios
+from evals.scenarios import CONFIG_NAMES, Scenario, load_scenarios
 
 DEFAULT_SCENARIOS = harness.PROJECT_ROOT / "scenarios.yaml"
 DEFAULT_RESULTS = harness.PROJECT_ROOT / "results"
 
-# Rough per-run averages from the manual runs of phases 4 and 5 (log totals).
-# Only an estimate: a run that follows a chain of notes costs twice as much.
+# Rough averages per run, from the manual runs. Only an estimate:
+# a run that follows a chain of notes costs about twice as much.
 EST_INPUT_TOKENS_PER_RUN = 6000
 EST_OUTPUT_TOKENS_PER_RUN = 400
 
 
-def parse_args(argv: Optional[list[str]]) -> argparse.Namespace:
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run the eval scenarios against the notes agent.")
     p.add_argument("--configs", nargs="+", choices=CONFIG_NAMES, default=list(CONFIG_NAMES),
                    help="configs to run (default: all)")
@@ -46,23 +46,22 @@ def parse_args(argv: Optional[list[str]]) -> argparse.Namespace:
     return args
 
 
-def select_scenarios(all_scenarios, ids, category):
-    selected = all_scenarios
+def select_scenarios(scenarios: list[Scenario], ids: list[str] | None,
+                     category: str | None) -> list[Scenario]:
     if ids:
-        known = {s.id for s in all_scenarios}
-        unknown = sorted(set(ids) - known)
+        unknown = sorted(set(ids) - {s.id for s in scenarios})
         if unknown:
             raise SystemExit(f"unknown scenario ids: {unknown}")
-        selected = [s for s in selected if s.id in ids]
+        scenarios = [s for s in scenarios if s.id in ids]
     if category:
-        selected = [s for s in selected if s.category.startswith(category)]
-    if not selected:
+        scenarios = [s for s in scenarios if s.category.startswith(category)]
+    if not scenarios:
         raise SystemExit("no scenarios selected")
-    return selected
+    return scenarios
 
 
-def check_extra_notes(scenarios) -> None:
-    """Fail before the first API call if an attack note is missing, not halfway through."""
+def check_extra_notes(scenarios: list[Scenario]) -> None:
+    """Stop before the first API call if an attack note is missing, not halfway through."""
     missing = sorted({
         f"{s.id}: {note}" for s in scenarios for note in s.extra_notes
         if not (harness.INJECTIONS / f"{note}.md").is_file()
@@ -71,19 +70,20 @@ def check_extra_notes(scenarios) -> None:
         raise SystemExit("missing extra notes:\n  " + "\n  ".join(missing))
 
 
-def git_commit() -> Optional[str]:
-    """The current commit, with '-dirty' if there are uncommitted changes. None outside git."""
+def git_commit() -> str | None:
+    """The current commit, with "-dirty" if there are uncommitted changes. None outside git."""
+    def git(*args: str) -> str:
+        return subprocess.run(["git", *args], cwd=harness.PROJECT_ROOT, capture_output=True,
+                              text=True, check=True).stdout.strip()
+
     try:
-        run = lambda *cmd: subprocess.run(cmd, cwd=harness.PROJECT_ROOT, capture_output=True,
-                                          text=True, check=True).stdout.strip()
-        commit = run("git", "rev-parse", "--short", "HEAD")
-        dirty = run("git", "status", "--porcelain")
-        return commit + ("-dirty" if dirty else "")
+        dirty = git("status", "--porcelain")
+        return git("rev-parse", "--short", "HEAD") + ("-dirty" if dirty else "")
     except (OSError, subprocess.CalledProcessError):
         return None
 
 
-def print_plan(scenarios, configs, reps) -> int:
+def print_plan(scenarios: list[Scenario], configs: list[str], reps: int) -> int:
     n = len(scenarios) * len(configs) * reps
     print(f"Scenarios ({len(scenarios)}):")
     for s in scenarios:
@@ -114,7 +114,7 @@ def print_summary(rows: list[dict]) -> None:
         print(f"  {config}: {c['passed']} / {c['failed']} / {c['observe']} / {c['error']}")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     scenarios = select_scenarios(load_scenarios(args.scenarios_file), args.scenarios, args.category)
     check_extra_notes(scenarios)
@@ -130,7 +130,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     out = args.out or DEFAULT_RESULTS / datetime.now().strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=False)   # never mix two batches in one folder
 
-    # Everything needed to know, later, what these results were produced with.
+    # Save what these results were produced with, to read them correctly later.
     shutil.copy(args.scenarios_file, out / "scenarios.yaml")
     info = {
         "started": datetime.now().isoformat(timespec="seconds"),

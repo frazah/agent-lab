@@ -1,24 +1,20 @@
 """Print a trace written by agent.py in a readable form.
-Usage: python src/read_trace.py [logs/trace-....jsonl]
+
+    python src/read_trace.py [logs/trace-....jsonl]
+
 With no path, it opens the most recent trace in logs/.
 """
 
 import json
 import sys
 from pathlib import Path
-from typing import Optional
 
 from store import NoteStore
+from tracer import load_events
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOGS = PROJECT_ROOT / "logs"
-
 BASE_NOTES = PROJECT_ROOT / "fixtures" / "base_notes"
-
-
-def load_events(path: Path) -> list[dict]:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return [json.loads(line) for line in lines if line.strip()]
 
 
 def latest_trace() -> Path:
@@ -32,7 +28,7 @@ def of_type(events: list[dict], event_type: str) -> list[dict]:
     return [e for e in events if e["type"] == event_type]
 
 
-def print_run(start: Optional[dict]) -> None:
+def print_run(start: dict | None) -> None:
     print("== Run")
     if start is None:
         print("(no run_start)")
@@ -43,20 +39,20 @@ def print_run(start: Optional[dict]) -> None:
     print(f"model:        {start['model']}")
 
 
-def outcome(result: Optional[dict]) -> str:
+def outcome(result: dict | None) -> str:
     if result is None:
-        return "no result"  # the run stopped between the call and the result
+        return "no result"   # the run stopped between the call and its result
     if not result["is_error"]:
         return "ok"
-    # Traces written before error_type existed only have is_error.
+    # Older traces have is_error but no error_type.
     return result.get("error_type") or "error"
 
 
 def confirmations_by_call(events: list[dict]) -> dict[str, dict]:
-    """Match each confirmation event to its tool_call.
-    A confirmation has no tool_use_id: the confirm function doesn't know it.
-    But it is logged while its delete_note runs, so it always comes right
-    after that call's tool_call event.
+    """Match each confirmation to its delete_note call.
+
+    A confirmation has no tool_use_id, but it is logged while its delete_note
+    runs, so it always comes right after that call's tool_call event.
     """
     matched = {}
     last_call_id = None
@@ -76,7 +72,7 @@ def print_steps(events: list[dict]) -> None:
     confirmations = confirmations_by_call(events)
 
     if not responses:
-        print("(no model_response events: trace written before they were logged)")
+        print("(no model_response events: an older trace)")
 
     for response in responses:
         step = response["step"]
@@ -105,7 +101,7 @@ def print_cost(events: list[dict]) -> None:
     print(f"tokens: {tokens_in} in / {tokens_out} out ({len(responses)} model calls)")
 
 
-def print_end(end: Optional[dict]) -> None:
+def print_end(end: dict | None) -> None:
     print("\n== End")
     if end is None:
         print("(no run_end: the run crashed or is still running)")

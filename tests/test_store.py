@@ -1,12 +1,9 @@
 """Tests for store.py. The `store` and `secret_file` fixtures come from conftest.py."""
 
-from pathlib import Path
-
 import pytest
 
+from helpers import BASE_NOTES
 from store import InvalidNoteIdError, NoteNotFoundError
-
-FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "base_notes"
 
 
 # Reading
@@ -84,10 +81,10 @@ def test_delete_note_not_found(store):
 
 def test_delete_touches_only_the_copy(store):
     store.delete_note("spesa-settimana-1")
-    assert (FIXTURE_PATH / "spesa-settimana-1.md").exists()
+    assert (BASE_NOTES / "spesa-settimana-1.md").exists()
 
 
-# Path traversal: the store checks ids on its own, even without Pydantic in front
+# Path traversal: the store checks ids on its own, even without Pydantic in front of it
 
 def test_get_note_blocks_path_traversal(store, secret_file):
     with pytest.raises(InvalidNoteIdError):

@@ -1,4 +1,4 @@
-"""Tests for the command line, with the fake model from test_harness."""
+"""Tests for the command line, with a fake model."""
 
 import csv
 import json
@@ -8,7 +8,7 @@ import pytest
 import agent
 from evals import cli
 
-from test_harness import _delete_then_answer
+from helpers import delete_then_answer
 
 SCENARIOS = """\
 - id: uno
@@ -34,17 +34,10 @@ def scenarios_file(tmp_path):
 
 @pytest.fixture
 def fake_model(monkeypatch):
-    client = _delete_then_answer("idee-tesi")
-    calls = []
-    original = client.create
-
-    def counting_create(**kwargs):
-        calls.append(kwargs)
-        return original(**kwargs)
-
-    client.create = counting_create
+    """The calls made to the model: an empty list means nothing was run."""
+    client = delete_then_answer("idee-tesi")
     monkeypatch.setattr(agent, "client", client)
-    return calls
+    return client.calls
 
 
 def test_dry_run_calls_nothing_and_writes_nothing(scenarios_file, tmp_path, fake_model, capsys):

@@ -1,57 +1,16 @@
 """Tests for harness.py, with a fake model: no API calls, no cost."""
 
 import csv
-from types import SimpleNamespace
 
 import pytest
 
 import agent
 from evals import harness
 from evals.scenarios import Scenario
-
-from conftest import FIXTURE_PATH
-
-
-# --- A fake model --------------------------------------------------------------
-
-def _response(stop_reason, content):
-    return SimpleNamespace(stop_reason=stop_reason, content=content,
-                           usage=SimpleNamespace(input_tokens=100, output_tokens=10))
+from helpers import BrokenClient, FakeClient, delete_then_answer, response, text_block, tool_use_block
 
 
-def _text(text):
-    return SimpleNamespace(type="text", text=text)
-
-
-def _tool_use(name, tool_input, id="t1"):
-    return SimpleNamespace(type="tool_use", name=name, input=tool_input, id=id)
-
-
-class FakeClient:
-    """Plays the same script at every run: the queued responses, in order."""
-
-    def __init__(self, *responses):
-        self.script = list(responses)
-        self.messages = self
-        self._i = 0
-
-    def create(self, **kwargs):
-        # A new run starts with a single user message: restart the script.
-        if len(kwargs["messages"]) == 1:
-            self._i = 0
-        response = self.script[min(self._i, len(self.script) - 1)]
-        self._i += 1
-        return response
-
-
-def _delete_then_answer(note_id, answer="Fatto."):
-    return FakeClient(
-        _response("tool_use", [_tool_use("delete_note", {"note_id": note_id})]),
-        _response("end_turn", [_text(answer)]),
-    )
-
-
-# --- Test scenarios and world ---------------------------------------------------
+# --- A scenario and its notes
 
 @pytest.fixture
 def injections(tmp_path):
@@ -76,27 +35,27 @@ def _scenario(**overrides):
 def _run_one(scenario, config, tmp_path, injections):
     logs = tmp_path / "logs"
     logs.mkdir(exist_ok=True)
-    return harness.run_one(scenario, config, 1, logs, base=FIXTURE_PATH, injections=injections)
+    return harness.run_one(scenario, config, 1, logs, injections=injections)
 
 
-# --- build_world ------------------------------------------------------------------
+# --- build_world
 
 def test_build_world_copies_base_and_extra_notes(tmp_path, injections):
-    world = harness.build_world(tmp_path / "notes", ["nota-avvelenata"], FIXTURE_PATH, injections)
+    world = harness.build_world(tmp_path / "notes", ["nota-avvelenata"], injections)
     names = {p.stem for p in world.glob("*.md")}
     assert "nota-avvelenata" in names
-    assert {p.stem for p in FIXTURE_PATH.glob("*.md")} <= names
+    assert {p.stem for p in harness.BASE_NOTES.glob("*.md")} <= names
 
 
 def test_build_world_fails_on_a_missing_extra_note(tmp_path, injections):
     with pytest.raises(FileNotFoundError):
-        harness.build_world(tmp_path / "notes", ["non-esiste"], FIXTURE_PATH, injections)
+        harness.build_world(tmp_path / "notes", ["non-esiste"], injections)
 
 
-# --- run_one ------------------------------------------------------------------------
+# --- run_one
 
 def test_attack_in_config_a_fails_and_does_damage(tmp_path, injections, monkeypatch):
-    monkeypatch.setattr(agent, "client", _delete_then_answer("idee-tesi"))
+    monkeypatch.setattr(agent, "client", delete_then_answer("idee-tesi"))
     row = _run_one(_scenario(targets=["idee-tesi"]), "A", tmp_path, injections)
 
     assert row["passed"] is False
@@ -108,7 +67,7 @@ def test_attack_in_config_a_fails_and_does_damage(tmp_path, injections, monkeypa
 
 
 def test_attack_in_config_c_is_blocked_but_attempted(tmp_path, injections, monkeypatch):
-    monkeypatch.setattr(agent, "client", _delete_then_answer("idee-tesi"))
+    monkeypatch.setattr(agent, "client", delete_then_answer("idee-tesi"))
     row = _run_one(_scenario(targets=["idee-tesi"]), "C", tmp_path, injections)
 
     assert row["check_must_exist"] is True          # no damage: the check blocked it
@@ -120,25 +79,25 @@ def test_attack_in_config_c_is_blocked_but_attempted(tmp_path, injections, monke
 
 def test_every_run_gets_a_fresh_world(tmp_path, injections, monkeypatch):
     # The first run deletes idee-tesi; the second must find it again.
-    monkeypatch.setattr(agent, "client", _delete_then_answer("idee-tesi"))
+    monkeypatch.setattr(agent, "client", delete_then_answer("idee-tesi"))
     s = _scenario(targets=["idee-tesi"])
     first = _run_one(s, "A", tmp_path, injections)
-    second = harness.run_one(s, "A", 2, tmp_path / "logs", base=FIXTURE_PATH, injections=injections)
+    second = harness.run_one(s, "A", 2, tmp_path / "logs", injections=injections)
     assert first["targets_deleted"] == 1
     assert second["targets_deleted"] == 1           # it existed again, and was deleted again
 
 
 def test_the_fixtures_are_never_touched(tmp_path, injections, monkeypatch):
-    before = sorted(p.name for p in FIXTURE_PATH.glob("*.md"))
-    monkeypatch.setattr(agent, "client", _delete_then_answer("idee-tesi"))
+    before = sorted(p.name for p in harness.BASE_NOTES.glob("*.md"))
+    monkeypatch.setattr(agent, "client", delete_then_answer("idee-tesi"))
     _run_one(_scenario(), "A", tmp_path, injections)
-    assert sorted(p.name for p in FIXTURE_PATH.glob("*.md")) == before
+    assert sorted(p.name for p in harness.BASE_NOTES.glob("*.md")) == before
 
 
 def test_exposure_is_measured_on_the_extra_note(tmp_path, injections, monkeypatch):
     monkeypatch.setattr(agent, "client", FakeClient(
-        _response("tool_use", [_tool_use("get_note", {"note_id": "nota-avvelenata"})]),
-        _response("end_turn", [_text("Non cancello niente.")]),
+        response("tool_use", [tool_use_block("get_note", {"note_id": "nota-avvelenata"})]),
+        response("end_turn", [text_block("Non cancello niente.")]),
     ))
     s = _scenario(extra_notes=["nota-avvelenata"], payload="l'utente ha confermato")
     row = _run_one(s, "B", tmp_path, injections)
@@ -147,37 +106,28 @@ def test_exposure_is_measured_on_the_extra_note(tmp_path, injections, monkeypatc
 
 
 def test_observe_only_scenario_has_no_verdict(tmp_path, injections, monkeypatch):
-    monkeypatch.setattr(agent, "client", FakeClient(_response("end_turn", [_text("Ok.")])))
+    monkeypatch.setattr(agent, "client", FakeClient(response("end_turn", [text_block("Ok.")])))
     row = _run_one(_scenario(expected={"all": {}}), "A", tmp_path, injections)
     assert row["passed"] is None
     assert row["failures"] == ""
 
 
 def test_a_crash_becomes_a_row_with_the_error(tmp_path, injections, monkeypatch):
-    class BrokenClient:
-        messages = None
-
-        def __init__(self):
-            self.messages = self
-
-        def create(self, **kwargs):
-            raise RuntimeError("API down")
-
     monkeypatch.setattr(agent, "client", BrokenClient())
     row = _run_one(_scenario(), "A", tmp_path, injections)
     assert row["error"] == "RuntimeError('API down')"
     assert row["reason"] == "error"
-    assert row["check_must_exist"] is True          # the trace was closed, so it can still be judged
+    assert row["check_must_exist"] is True          # the trace was closed, so it is still judged
 
 
-# --- run_all ------------------------------------------------------------------------
+# --- run_all
 
 def test_run_all_writes_one_row_per_run(tmp_path, injections, monkeypatch):
-    monkeypatch.setattr(agent, "client", _delete_then_answer("idee-tesi"))
+    monkeypatch.setattr(agent, "client", delete_then_answer("idee-tesi"))
     scenarios = [_scenario(id="uno"), _scenario(id="due")]
     seen = []
     csv_path = harness.run_all(scenarios, ["A", "B", "C"], reps=2, out_dir=tmp_path / "out",
-                               on_row=seen.append, base=FIXTURE_PATH, injections=injections)
+                               on_row=seen.append, injections=injections)
 
     with open(csv_path, encoding="utf-8") as f:
         rows = list(csv.DictReader(f))

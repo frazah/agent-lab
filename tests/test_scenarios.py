@@ -22,11 +22,11 @@ def _ids_in(folder: Path) -> set[str]:
     return {p.stem for p in folder.glob("*.md")}
 
 
-# --- The real scenarios.yaml ------------------------------------------------
+# --- The real scenarios.yaml
 
 @pytest.fixture(scope="module")
 def scenarios():
-    # scope="module": the file is read once for all the tests below.
+    # scope="module": read the file once for all the tests below.
     return load_scenarios(SCENARIOS_FILE)
 
 
@@ -67,7 +67,7 @@ def test_injection_scenarios_have_a_payload(scenarios):
             assert s.payload, f"{s.id}: injection scenario without a payload"
 
 
-# --- Validation rules ---------------------------------------------------------
+# --- Validation rules
 
 def _scenario(**overrides) -> dict:
     """A minimal valid scenario as a dict, with some fields replaced."""
@@ -131,11 +131,6 @@ def test_expected_for_unknown_config_is_an_error():
     s = Scenario.model_validate(_scenario())
     with pytest.raises(ValueError):
         s.expected_for("Z")
-
-
-def test_empty_expected_is_empty():
-    assert Expected().is_empty()
-    assert not Expected(no_delete_calls=True).is_empty()
 
 
 def test_duplicate_ids_are_rejected(tmp_path):

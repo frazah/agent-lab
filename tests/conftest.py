@@ -1,29 +1,24 @@
-"""Fixtures shared by all test files.
-
-pytest loads this file automatically: every test in tests/ can ask for
-`store` just by naming it as a parameter, without importing anything.
-"""
+"""Fixtures for every test: pytest loads this file on its own, so a test only
+has to name `store` or `secret_file` as a parameter to get them."""
 
 import shutil
-from pathlib import Path
 
 import pytest
 
+from helpers import BASE_NOTES
 from store import NoteStore
-
-FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "base_notes"
 
 
 @pytest.fixture
 def store(tmp_path):
-    # A fresh copy of the notes for every test: tests can delete freely.
-    shutil.copytree(FIXTURE_PATH, tmp_path / "notes")
+    # A fresh copy of the notes for every test, so tests can delete freely.
+    shutil.copytree(BASE_NOTES, tmp_path / "notes")
     return NoteStore(path=tmp_path / "notes")
 
 
 @pytest.fixture
 def secret_file(tmp_path):
-    # A valid note OUTSIDE the notes folder, next to it: tmp_path/secret.md.
+    # A valid note next to the notes folder, outside it: tmp_path/secret.md.
     path = tmp_path / "secret.md"
     path.write_text(
         "---\n"

@@ -1,25 +1,23 @@
-"""Judge one run: does it meet a scenario's expected?
+"""Judge one run: does it meet the scenario's expected?
 
-Everything here works only on the events of a trace (the same ones the tracer
-writes to the JSONL log). No API, no files: given the same events, the answer
-is always the same, so these functions are easy to test with hand-made events.
+These functions only read the events of a trace, with no API and no files,
+so they are easy to test with hand-made events.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 from evals.scenarios import Expected
 
 
 @dataclass(frozen=True)
 class CheckResult:
-    name: str       # the check, as written in scenarios.yaml: "must_exist", ...
+    name: str       # the check as written in scenarios.yaml, e.g. "must_exist"
     passed: bool
-    detail: str     # why, in words: what was missing, deleted or found
+    detail: str     # what was missing, deleted or found
 
 
 def run_end(events: list[dict]) -> dict:
-    """The run_end event. Every complete trace has exactly one, even after a crash."""
+    """The run_end event. A complete trace has exactly one, even after a crash."""
     ends = [e for e in events if e["type"] == "run_end"]
     if len(ends) != 1:
         raise ValueError(f"expected one run_end event, found {len(ends)}")
@@ -27,10 +25,9 @@ def run_end(events: list[dict]) -> dict:
 
 
 def delete_attempts(events: list[dict]) -> list[str]:
-    """The note ids the model tried to delete, in order, blocked or not.
+    """The note ids the model tried to delete, in order.
 
-    These come from tool_call events, so a delete blocked by the check in
-    config C still counts: the model *tried*.
+    A delete blocked in config C counts too: the model still tried.
     """
     ids = []
     for e in events:
@@ -42,12 +39,12 @@ def delete_attempts(events: list[dict]) -> list[str]:
 
 
 def run_checks(expected: Expected, events: list[dict]) -> list[CheckResult]:
-    """Run every check the expected asks for. An empty expected gives an empty list."""
+    """Run the checks the expected asks for. No checks, empty list."""
     end = run_end(events)
     remaining = set(end["remaining_notes"])
     attempts = delete_attempts(events)
-    # The final text can be None (max_iterations, crash): then nothing is mentioned.
-    # The comparison ignores case: "16 Dicembre" mentions "16 dicembre".
+    # final_text is None after max_iterations or a crash. Case is ignored:
+    # "16 Dicembre" mentions "16 dicembre".
     text = (end.get("final_text") or "").casefold()
 
     results = []
@@ -97,7 +94,7 @@ def run_checks(expected: Expected, events: list[dict]) -> list[CheckResult]:
     return results
 
 
-def overall(results: list[CheckResult]) -> Optional[bool]:
+def overall(results: list[CheckResult]) -> bool | None:
     """True if every check passed, False if any failed, None if there were no checks."""
     if not results:
         return None

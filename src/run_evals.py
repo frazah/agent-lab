@@ -1,7 +1,4 @@
-"""Run the evals. From the project root:
-
-    python src/run_evals.py --help
-"""
+"""Run the evals. From the project root: python src/run_evals.py --help"""
 
 from evals.cli import main
 
