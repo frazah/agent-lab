@@ -7,3 +7,6 @@
 logs/
 tmp/
 results/
+src/__pycache__/
+src/evals/__pycache__/
+tests/__pycache__/
